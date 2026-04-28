@@ -2,57 +2,77 @@
 # requires-python = ">=3.13"
 # dependencies = [
 #     "google-genai",
+#     "langchain-text-splitters",
 #     "pypdf",
 # ]
 # ///
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from pypdf import PdfReader
 from gemini_model import GeminiModel
 from gemini_query import QueryFile
-
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 @dataclass
 class Document:
     path: Path
-    points:list[dict] = field(default_factory=list)
-    model: GeminiModel = GeminiModel()
+    model: "GeminiModel"
+    summary:str=""
+    summary_embedding:list=field(default_factory=list)
+    document_embedding:list =field(default_factory=list)
 
-    def extract_key_point(self) -> "Document":
-        query_string= "Extract the most important point from the file"
-        if len(self.points)>0:
-            existing_points = [point["Point"] for point in self.points]
-            query_string += "that is not" + " or ".join(existing_points)
-        query = QueryFile(str(self.path),query_string)
-        point = self.model.query_with_document(query)
-        embedding = self.model.generate_embedding(point)
-        self.points.append({"Point":point, "Embedding":embedding})
+    def read_pdf(self)->str:
+        reader=PdfReader(self.path)
+        all_text = ""
+        for page in reader.pages:
+            text=page.extract_text()
+            if text:
+                all_text+= text + "\n"
+        return all_text
+
+    def embed_pdf(self)->"Document":
+        text = self.read_pdf()
+        self.document_embedding = self.embed_data(text)
         return self
 
-    def extract_key_points(self) -> "Document":
-        while len(self.points)<10:
-            self.extract_key_point()
+    def construct_summary(self)-> "Document":
+        query = QueryFile(str(self.path), 
+                        "Extract the key points from the document"
+                          )
+        self.summary = self.model.query_with_document(query)
+        self.summary_embedding = self.embed_data(self.summary)
         return self
 
-
+    def embed_data(self, data)-> list:
+        text_splitter= RecursiveCharacterTextSplitter(chunk_size = 100, chunk_overlap=20)
+        texts=text_splitter.split_text(data)
+        embedded_text=[]
+        for text in texts:
+            embedded_text.append({
+                "Text": text,
+                "Embedding":self.model.generate_embedding(text)
+                })
+        return embedded_text
 
     @classmethod
-    def from_path_string(cls, path_string: str) ->"Document":
+    def from_path_string(cls, path_string: str, model: "GeminiModel") ->"Document":
         path = Path(path_string)
-        return cls(path).extract_key_points()
+        return cls(path, model).construct_summary().embed_pdf()
 
     def __str__(self):
         class_string = ""
         class_string += f"Document can be found at {self.path} with output: \n\n"
-        page_count = 1
-        for point in self.points:
-            class_string += f"Page {page_count}: \n\n"
-            class_string += point["Point"]
-            class_string+= "\n\n"
-            class_string+= f"Embedding equals: {point["Embedding"]}"
-            page_count += 1
+        class_string += self.summary
+        if len(self.summary_embedding)>0:
+            class_string += "\n\n The summary has an embedding"
+        else:
+            class_string += "\n\n The summary is not embedded"
+        if len(self.document_embedding)>0:
+            class_string += "\n\n The Document has an embedding"
+        else:
+            class_string += "\n\n The Document is not embedded"
         return class_string
-       
 
 if __name__ == "__main__":
     import os
@@ -60,6 +80,7 @@ if __name__ == "__main__":
     files = os.listdir("../../data")
 
     for file in files:
-        document = Document.from_path_string(os.path.join(absolute_path, file))
+        document = Document.from_path_string(os.path.join(absolute_path,
+                                                          file), GeminiModel())
     print(document)
 
