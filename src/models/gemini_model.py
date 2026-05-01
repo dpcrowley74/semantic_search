@@ -1,5 +1,6 @@
 from google import genai
-from gemini_query import QueryFile
+from google.genai import types
+from .tools import QueryFile
 
 class GeminiModel:
     client = genai.Client()
@@ -24,6 +25,7 @@ class GeminiModel:
             result = self.client.models.embed_content(
                 model = "gemini-embedding-001",
                 contents=contents,
+                config=types.EmbedContentConfig(output_dimensionality=512)
                 )
             return result.embeddings
         except Exception as e:
